@@ -1,13 +1,13 @@
 require 'carrierwave'
-require 'riak'
+require 'rubberband'
 
 module CarrierWave
   module Uploader
-    class Riak < Base
+    class Elasticsearch < Base
 
       attr_accessor :key
 
-      storage :riak
+      storage :elasticsearch
 
       if defined?(Rails)
         after :store, :updatemodel
@@ -20,7 +20,7 @@ module CarrierWave
       end
 
       def inspect
-        "#<#{self.class.name} key=#{key.inspect} bucket=#{bucket.inspect}>"
+        "#<#{self.class.name} key=#{key.inspect} index=#{index.inspect}>"
       end
 
       private

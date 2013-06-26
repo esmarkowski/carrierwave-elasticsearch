@@ -1,6 +1,6 @@
 # encoding: utf-8
 require 'carrierwave'
-require 'riak'
+require 'rubberband'
 
 module CarrierWave
   module Storage
@@ -8,51 +8,42 @@ module CarrierWave
     ##
     #
     #     CarrierWave.configure do |config|
-    #       config.riak_host = "http://localhost
-    #       config.riak_port = 8098
+    #       config.elasticsearch_host = "http://localhost
+    #       config.elasticsearch_port = 8098
     #     end
     #
     #
-    class Riak < Abstract
+    class Elasticsearch < Abstract
 
       class Connection
-        def initialize(options={})
-          @client = ::Riak::Client.new(options)
+        def initialize(servers, options)
+          @client = ::ElasticSearch.new(servers, options)
         end
 
-        def store(bucket, key, payload, headers = {})
-          bucket = @client.bucket(bucket)
-          robject = ::Riak::RObject.new(bucket, key)
-          robject.content_type = headers[:content_type]
-          robject.raw_data = payload
-          robject.store
+        def store(index, type, payload, headers = {})
+          @client.bulk do |d|
+            JSON.parse(payload).each do |msg|
+              @client.index(msg, index: index, type: type, _meta: headers)
+            end
+          end
+#          @client.index(payload, index: index, type: '')
         end
 
-        def get(bucket, key)
-          bucket = @client.bucket(bucket)
-          bucket.get(key)
+        def get(index, id)
+          @client.get(id, index: index, type: '')
         end
 
-        def delete(bucket, key)
-          bucket = @client.bucket(bucket)
-          bucket.delete(key)
-        end
-
-        def post(path, payload, headers = {})
-          @http["#{escaped(path)}"].post(payload, headers)
-        end
-
-        def escaped(path)
-          CGI.escape(path)
+        def delete(index, id)
+          @client.delete(id, index: index, type: '')
         end
       end
 
       class File
 
-        def initialize(uploader, base, bucket, key)
+        def initialize(uploader, base, index, id)
           @uploader = uploader
-          @bucket = bucket
-          @key = key
+          @index = index
+          @key = id
           @base = base
         end
 
@@ -90,17 +81,6 @@ module CarrierWave
         end
 
         ##
-        # Return riak meta data
-        #
-        # === Returns
-        #
-        # [Haash] A hash of X-Riak-Meta-* headers
-        #
-        def meta
-          file.meta
-        end
-
-        ##
         # Return size of file body
         #
         # === Returns
@@ -108,7 +88,7 @@ module CarrierWave
         # [Integer] size of file body
         #
         def size
-          file.raw_data.length
+          0 #file.raw_data.length
         end
 
         ##
@@ -119,7 +99,7 @@ module CarrierWave
         # [String] contents of the file
         #
         def read
-          file.raw_data
+          file._source
         end
 
         ##
@@ -127,7 +107,7 @@ module CarrierWave
         #
         def delete
           begin
-            riak_client.delete(@bucket, @key)
+            elasticsearch_client.delete(@index, @key)
             true
           rescue Exception => e
             # If the file's not there, don't panic
@@ -143,8 +123,8 @@ module CarrierWave
         # boolean
         #
         def store(file)
-          @file = riak_client.store(@bucket, @key, file.read, {:content_type => file.content_type})
-          @key = @file.key
+          @file = elasticsearch_client.store(@index, @key, file.read, {:content_type => file.content_type, :filename => @key })
+          @key = @key
           @uploader.key = @key
           true
         end
@@ -167,23 +147,28 @@ module CarrierWave
           # [Riak::RObject] file data from remote service
           #
           def file
-            @file ||= riak_client.get(@bucket, @key)
+            @file ||= elasticsearch_client.get(@index, @key)
           end
 
-          def riak_client
-            if @riak_client
-              @riak_client
+          def elasticsearch_client
+            if @elasticsearch_client
+              @elasticsearch_client
             else
-              @riak_client ||= CarrierWave::Storage::Riak::Connection.new(riak_options)
+              @elasticsearch_client ||= CarrierWave::Storage::Elasticsearch::Connection.new(elasticsearch_options, elasticsearch_transport)
             end
           end
 
-          def riak_options
-            if @uploader.riak_nodes
-              {:nodes => @uploader.riak_nodes}
+          def elasticsearch_options
+            options = if @uploader.elasticsearch_nodes
+              @uploader.elasticsearch_nodes
             else
-              {:host => @uploader.riak_host, :http_port => @uploader.riak_port}
+              "#{@uploader.elasticsearch_host}:#{@uploader.elasticsearch_port}"
             end
+          end
+
+          def elasticsearch_transport
+            transport = {}
+            transport.merge(:transport => ::ElasticSearch::Transport::Thrift) if @uploader.elasticsearch_transport == :thrift
           end
 
       end
@@ -200,7 +185,7 @@ module CarrierWave
       # [CarrierWave::Storage::Riak::File] the stored file
       #
       def store!(file)
-        f = CarrierWave::Storage::Riak::File.new(uploader, self, uploader.bucket, uploader.key)
+        f = CarrierWave::Storage::Elasticsearch::File.new(uploader, self, uploader.index, uploader.key)
         f.store(file)
         f
       end
@@ -216,7 +201,7 @@ module CarrierWave
       # [CarrierWave::Storage::Riak::File] the stored file
       #
       def retrieve!(key)
-        CarrierWave::Storage::Riak::File.new(uploader, self, uploader.bucket, key)
+        CarrierWave::Storage::Elasticsearch::File.new(uploader, self, uploader.index, key)
       end
 
       def identifier

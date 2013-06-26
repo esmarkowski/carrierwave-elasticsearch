@@ -1,12 +1,12 @@
 module CarrierWave
-  module Riak
+  module Elasticsearch
     module Configuration
       extend ActiveSupport::Concern
       included do
-        add_config :riak_bucket
-        add_config :riak_host
-        add_config :riak_port
-        add_config :riak_nodes
+        add_config :elasticsearch_host
+        add_config :elasticsearch_port
+        add_config :elasticsearch_nodes
+        add_config :elasticsearch_transport
       end
     end
 
